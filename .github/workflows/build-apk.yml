@@ -1,14 +1,18 @@
 name: Build Android APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
       - master
-  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Debug APK
     runs-on: ubuntu-latest
 
     defaults:
@@ -16,7 +20,7 @@ jobs:
         working-directory: swiftpos
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -30,18 +34,19 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: "21"
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: npm ci
 
-      - name: Build Web App
+      - name: Build web application
         run: npm run build
 
-      - name: Add Android Platform
+      - name: Add Android platform (if missing)
         run: |
           if [ ! -d android ]; then
             npx cap add android
@@ -50,22 +55,64 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Generate Icons
+      - name: Generate app icons
         run: |
           if npm list @capacitor/assets >/dev/null 2>&1; then
             npx capacitor-assets generate --android
+          else
+            echo "Skipping icon generation."
           fi
         continue-on-error: true
 
-      - name: Make gradlew Executable
+      - name: Patch AndroidManifest.xml
+        run: |
+          python3 <<'PY'
+          import os,re
+
+          path="android/app/src/main/AndroidManifest.xml"
+
+          if not os.path.exists(path):
+              raise SystemExit(f"{path} not found")
+
+          with open(path,"r",encoding="utf-8") as f:
+              xml=f.read()
+
+          permissions=[
+              '<uses-permission android:name="android.permission.CAMERA"/>',
+              '<uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>',
+              '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>',
+              '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>',
+              '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>',
+              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>',
+              '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>',
+              '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>'
+          ]
+
+          for perm in permissions:
+              name=re.search(r'android:name="([^"]+)"',perm).group(1)
+              if name not in xml:
+                  xml=re.sub(r'(<manifest[^>]*>)',r'\1\n    '+perm,xml,1)
+
+          if "com.google.mlkit.vision.DEPENDENCIES" not in xml:
+              meta='<meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="barcode_ui"/>'
+              xml=re.sub(r'(<application[^>]*>)',r'\1\n        '+meta,xml,1)
+
+          with open(path,"w",encoding="utf-8") as f:
+              f.write(xml)
+
+          print("AndroidManifest patched.")
+          PY
+
+      - name: Make Gradle executable
         run: chmod +x android/gradlew
 
-      - name: Build APK
+      - name: Build Debug APK
         working-directory: swiftpos/android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SwiftPOS-Debug-APK
+          name: SwiftPOS-debug-apk
           path: swiftpos/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
