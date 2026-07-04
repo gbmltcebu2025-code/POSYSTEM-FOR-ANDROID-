@@ -3,20 +3,26 @@ name: Build Android APK
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: swiftpos
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
+          cache-dependency-path: swiftpos/package-lock.json
 
       - name: Install dependencies
         run: npm install
@@ -24,90 +30,63 @@ jobs:
       - name: Build web app
         run: npm run build
 
-      - name: Add Android platform (if not already present)
+      - name: Add Android platform if missing
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           fi
 
-      - name: Generate native app icon
-        run: npx capacitor-assets generate --android
+      - name: Generate Android assets
+        run: npx capacitor-assets generate --android || true
 
-      - name: Add camera & photo permissions to AndroidManifest.xml
+      - name: Patch AndroidManifest
         run: |
           python3 - << 'PYEOF'
           import re
-          path = "android/app/src/main/AndroidManifest.xml"
-          with open(path) as f:
-              content = f.read()
 
-          if 'android.permission.CAMERA' not in content:
-              content = re.sub(
-                  r'(<manifest[^>]*>)',
-                  r'\1\n    <uses-permission android:name="android.permission.CAMERA" />',
-                  content,
-                  count=1,
-              )
+          path="android/app/src/main/AndroidManifest.xml"
 
-          if 'READ_MEDIA_IMAGES' not in content:
-              content = re.sub(
-                  r'(<manifest[^>]*>)',
-                  r'\1\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />',
-                  content,
-                  count=1,
-              )
+          with open(path,"r") as f:
+              content=f.read()
 
-          if 'READ_EXTERNAL_STORAGE' not in content:
-              content = re.sub(
-                  r'(<manifest[^>]*>)',
-                  r'\1\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
-                  content,
-                  count=1,
-              )
-
-          bluetooth_permissions = [
-              '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
-              '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
-              '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />',
-              '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
-              '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />',
+          permissions=[
+          '<uses-permission android:name="android.permission.CAMERA" />',
+          '<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />',
+          '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
+          '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
+          '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
+          '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />',
+          '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
+          '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />'
           ]
-          for perm in bluetooth_permissions:
-              name = re.search(r'android:name="([^"]+)"', perm).group(1)
-              if name not in content:
-                  content = re.sub(
-                      r'(<manifest[^>]*>)',
-                      lambda m, p=perm: f'{m.group(1)}\n    {p}',
-                      content,
-                      count=1,
-                  )
 
-          if 'com.google.mlkit.vision.DEPENDENCIES' not in content:
-              content = re.sub(
+          for perm in permissions:
+              name=re.search(r'android:name="([^"]+)"',perm).group(1)
+              if name not in content:
+                  content=re.sub(r'(<manifest[^>]*>)',r'\1\n    '+perm,content,1)
+
+          if "com.google.mlkit.vision.DEPENDENCIES" not in content:
+              content=re.sub(
                   r'(<application[^>]*>)',
                   r'\1\n        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="barcode_ui" />',
                   content,
-                  count=1,
+                  1
               )
 
-          with open(path, "w") as f:
+          with open(path,"w") as f:
               f.write(content)
-          print("AndroidManifest.xml patched")
           PYEOF
 
-      - name: Sync web assets into the Android project
+      - name: Sync Capacitor
         run: npx cap sync android
 
-      # Java/Android SDK are only needed for the actual Gradle build below.
-      # They're set up here (after the android/ project already exists)
-      # so setup-java's Gradle-file detection has real files to find.
-      - name: Set up JDK
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
-          cache: 'gradle'
-          cache-dependency-path: 'android/**/*.gradle*'
+          java-version: 21
+          cache: gradle
+          cache-dependency-path: swiftpos/android/**/*.gradle*
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -115,13 +94,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Build debug APK
-        working-directory: android
+      - name: Build APK
+        working-directory: swiftpos/android
         run: ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SwiftPOS-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-
+          path: swiftpos/android/app/build/outputs/apk/debug/app-debug.apk
