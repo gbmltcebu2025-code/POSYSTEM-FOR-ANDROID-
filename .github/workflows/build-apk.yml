@@ -2,7 +2,9 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 jobs:
@@ -17,7 +19,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -30,23 +32,23 @@ jobs:
       - name: Build web app
         run: npm run build
 
-      - name: Add Android platform if missing
+      - name: Add Android platform (if missing)
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           fi
 
-      - name: Generate Android assets
+      - name: Generate Capacitor assets
         run: npx capacitor-assets generate --android || true
 
-      - name: Patch AndroidManifest
+      - name: Patch AndroidManifest.xml
         run: |
-          python3 - << 'PYEOF'
+          python3 <<'PY'
           import re
 
           path="android/app/src/main/AndroidManifest.xml"
 
-          with open(path,"r") as f:
+          with open(path,"r",encoding="utf-8") as f:
               content=f.read()
 
           permissions=[
@@ -55,7 +57,7 @@ jobs:
           '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
           '<uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />',
           '<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />',
-          '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />',
+          '<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />',
           '<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />',
           '<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />'
           ]
@@ -73,14 +75,16 @@ jobs:
                   1
               )
 
-          with open(path,"w") as f:
+          with open(path,"w",encoding="utf-8") as f:
               f.write(content)
-          PYEOF
+
+          print("AndroidManifest patched")
+          PY
 
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -88,15 +92,15 @@ jobs:
           cache: gradle
           cache-dependency-path: swiftpos/android/**/*.gradle*
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Make gradlew executable
+      - name: Grant execute permission
         run: chmod +x android/gradlew
 
-      - name: Build APK
+      - name: Build Debug APK
         working-directory: swiftpos/android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
